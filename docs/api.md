@@ -50,7 +50,7 @@ device.
 | `/api/v1/version` | `{}` | API and ShadowMount versions plus capabilities |
 | `/api/v1/storage` | `{}` | Mounted storage filesystems with total, free and available space |
 | `/api/v1/images` | `{}` | Complete image snapshot |
-| `/api/v1/scan` | `{"reset_attempts":false}` | Queue an immediate full rescan; optionally reset title and image retry counters |
+| `/api/v1/scan` | `{"reset_attempts":false,"requester_title_id":"PPSA12345"}` | Queue an immediate full rescan; optionally reset title and image retry counters. `requester_title_id` is optional |
 | `/api/v1/manual/list` | `{}` | List direct paths to individual game folders or images from `manual.lst` |
 | `/api/v1/manual/add` | `{"path":"/mnt/usb0/games/PPSA12345"}` | Idempotently add one game source to `manual.lst` |
 | `/api/v1/manual/remove` | `{"path":"/mnt/usb0/games/PPSA12345"}` | Remove matching source lines from `manual.lst` |
@@ -113,7 +113,7 @@ A successful version response has this shape:
   "status": 0,
   "api_version": 1,
   "shadowmount_version": "1.7",
-  "capabilities": ["web_ui", "storage_space", "list_images", "list_games", "game_info", "game_icon", "mount_game", "unmount_game", "uninstall_game", "move_game_source", "copy_game_source", "delete_game_source", "unpack_game_image", "storage_job_status", "storage_job_cancel", "list_manual_sources", "add_manual_source", "remove_manual_source", "manage_settings", "read_debug_log", "read_kernel_log", "rescan"]
+  "capabilities": ["web_ui", "storage_space", "list_images", "list_games", "game_info", "game_icon", "mount_game", "unmount_game", "uninstall_game", "move_game_source", "copy_game_source", "delete_game_source", "unpack_game_image", "storage_job_status", "storage_job_cancel", "list_manual_sources", "add_manual_source", "remove_manual_source", "manage_settings", "read_debug_log", "read_kernel_log", "rescan", "rescan_requester_title"]
 }
 ```
 
@@ -255,6 +255,23 @@ before the requested full scan starts it clears all title registration and
 install/remount counters plus all path-owned image-mount counters. If several
 scan requests merge while one is pending, one `true` request keeps the reset
 enabled for that scan.
+
+A homebrew app that runs while it asks for a scan, for example after copying
+a game into a scan path, can pass its own title ID as `requester_title_id`.
+Apps should read their title ID at runtime rather than hardcode it. When that
+title is the running game, the scan runs immediately instead of waiting for the
+app to exit, provided that:
+
+- it is the only tracked running game and the only runtime ShellCore holds,
+  with no launch, game switch or release in progress;
+- it is a managed folder source, not a disk image.
+
+That scan never remounts, re-registers, cleans up or uninstalls the requester,
+nor any title ShellCore prepares while the scan runs. Otherwise the request
+waits like any other scan. The response reports `scan_deferred=false` when the
+requester is eligible at response time; eligibility is checked again when the
+scan starts. Several merged requests use the most recent requester. Servers
+supporting this field list `rescan_requester_title` in `capabilities`.
 
 Manual entries are direct paths to individual game directories or image files;
 they are not recursive scan roots. Updates atomically replace `manual.lst` and preserve comments and

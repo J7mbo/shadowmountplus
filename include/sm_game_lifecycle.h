@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "sm_limits.h"
+
 // Start the shared game lifecycle watcher used by runtime game features.
 bool start_game_lifecycle_watcher(void);
 // Wake the shared watcher so pending lifecycle work is processed immediately.
@@ -12,6 +14,9 @@ void wake_game_lifecycle_watcher(void);
 void stop_game_lifecycle_watcher(void);
 // Return true when a supported game is currently being tracked as running.
 bool sm_game_lifecycle_has_active_game(void);
+// Copy the title ID of the single running tracked game. Returns false when no
+// game runs or a process exit/handoff is in flight.
+bool sm_game_lifecycle_get_active_title(char title_id_out[MAX_TITLE_ID]);
 // Publish and wake lifecycle processing for an AppFocus change.
 void sm_game_lifecycle_note_app_focus(uint32_t app_id);
 // Ensure the shared watcher is running for runtime game-state tracking.

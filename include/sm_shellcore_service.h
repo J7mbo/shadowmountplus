@@ -39,6 +39,9 @@ bool sm_shellcore_service_title_sandbox_exists(const char *title_id);
 bool sm_shellcore_ensure_title_runtime(const char *title_id);
 // Return true when the named title owns an incoming or outgoing runtime mount.
 bool sm_shellcore_service_title_is_prepared(const char *title_id);
+// Return true when the named title is the only runtime ShellCore holds (or none
+// is held) and no launch, switch or release is in flight.
+bool sm_shellcore_service_only_title_prepared(const char *title_id);
 // Return true while ShellCore owns any title mount prepared for launch or exit.
 bool sm_shellcore_service_has_prepared_mount(void);
 // Exclude new launch preparation while an external AppInst mutation runs.

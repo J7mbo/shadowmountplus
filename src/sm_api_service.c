@@ -630,7 +630,8 @@ static void handle_version(struct MHD_Connection *fd) {
       !append_json_string(capabilities, "manage_settings") ||
       !append_json_string(capabilities, "read_debug_log") ||
       !append_json_string(capabilities, "read_kernel_log") ||
-      !append_json_string(capabilities, "rescan")) {
+      !append_json_string(capabilities, "rescan") ||
+      !append_json_string(capabilities, "rescan_requester_title")) {
     json_object_put(capabilities);
     json_object_put(response);
     send_out_of_memory_response(fd);
@@ -1646,11 +1647,16 @@ static void send_operation_error_response(struct MHD_Connection *connection,
   json_object_put(response);
 }
 
-static bool add_scan_queue_fields(struct json_object *response, bool queued) {
+static bool add_scan_queue_fields_for_requester(
+    struct json_object *response, bool queued,
+    const char *requester_title_id) {
   const char *reason = "";
   if (queued) {
     if (runtime_sleep_mode_active())
       reason = "rest_mode";
+    else if (requester_title_id &&
+             sm_scanner_requester_may_scan_while_active(requester_title_id))
+      reason = "";
     else if (sm_game_lifecycle_has_active_game())
       reason = "game_active";
     else if (sm_shellcore_service_has_prepared_mount())
@@ -1659,6 +1665,10 @@ static bool add_scan_queue_fields(struct json_object *response, bool queued) {
   return add_json_bool(response, "scan_queued", queued) &&
          add_json_bool(response, "scan_deferred", reason[0] != '\0') &&
          add_json_string(response, "scan_deferred_reason", reason);
+}
+
+static bool add_scan_queue_fields(struct json_object *response, bool queued) {
+  return add_scan_queue_fields_for_requester(response, queued, NULL);
 }
 
 static void handle_scan(struct MHD_Connection *fd,
@@ -1675,7 +1685,24 @@ static void handle_scan(struct MHD_Connection *fd,
     return;
   }
 
-  if (!request_scan_now_with_options("HTTP API request", reset_attempts)) {
+  // Optional: the running title asking for this scan. When it is the active
+  // game, the scan runs now instead of waiting for that title to exit.
+  const char *requester_title_id = NULL;
+  struct json_object *requester_value = NULL;
+  if (json_object_object_get_ex(request, "requester_title_id",
+                                &requester_value)) {
+    if (!json_object_is_type(requester_value, json_type_string) ||
+        !is_supported_game_title_id(
+            json_object_get_string(requester_value))) {
+      send_error_response(fd, 400, EINVAL,
+                          "requester_title_id must be a valid title ID");
+      return;
+    }
+    requester_title_id = json_object_get_string(requester_value);
+  }
+
+  if (!request_scan_now_for_title("HTTP API request", reset_attempts,
+                                  requester_title_id)) {
     send_operation_error_response(fd, EBUSY, "rest_mode");
     return;
   }
@@ -1686,7 +1713,8 @@ static void handle_scan(struct MHD_Connection *fd,
     return;
   }
   if (!add_json_bool(response, "queued", true) ||
-      !add_scan_queue_fields(response, true) ||
+      !add_scan_queue_fields_for_requester(response, true,
+                                           requester_title_id) ||
       !add_json_bool(response, "reset_attempts", reset_attempts)) {
     json_object_put(response);
     send_out_of_memory_response(fd);

@@ -401,6 +401,11 @@ void process_scan_candidates(const scan_candidate_t *candidates,
       return;
 
     const scan_candidate_t *c = &candidates[i];
+    if (runtime_scan_title_is_protected(c->title_id)) {
+      log_debug("  [SKIP] title is running, left untouched: %s (%s)",
+                c->title_name, c->title_id);
+      continue;
+    }
     bool has_src_snd0 = false;
     bool use_app_install_all =
         runtime_config().app_install_all_enabled && !c->in_app_db;

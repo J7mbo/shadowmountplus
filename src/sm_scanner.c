@@ -1938,6 +1938,28 @@ bool sm_scanner_usb_watches_suspended(void) {
   return atomic_load_explicit(&g_usb_watches_suspended, memory_order_acquire);
 }
 
+bool sm_scanner_requester_may_scan_while_active(const char *title_id) {
+  if (!title_id || title_id[0] == '\0' || !is_supported_game_title_id(title_id))
+    return false;
+
+  char active_title_id[MAX_TITLE_ID];
+  if (!sm_game_lifecycle_get_active_title(active_title_id) ||
+      strcmp(active_title_id, title_id) != 0) {
+    return false;
+  }
+  if (!sm_shellcore_service_only_title_prepared(title_id))
+    return false;
+
+  // Only managed folder titles qualify: an image-backed title shares image
+  // mounts that scan cleanup may touch.
+  char source_path[MAX_PATH];
+  if (!read_mount_link(title_id, source_path, sizeof(source_path)) ||
+      source_path[0] == '\0' || is_under_image_mount_base(source_path)) {
+    return false;
+  }
+  return true;
+}
+
 bool sm_scanner_try_begin_external_mutation(void) {
   return pthread_mutex_trylock(&g_scanner_cycle_mutex) == 0;
 }
@@ -2100,9 +2122,25 @@ void sm_scanner_run_loop(void) {
                            sm_shellcore_service_has_prepared_mount();
     char scan_reason[128];
     bool reset_attempts = false;
-    if (!game_mount_busy &&
-        consume_scan_now_request(scan_reason, sizeof(scan_reason),
-                                 &reset_attempts)) {
+    // A running title may ask for a scan for itself; it then runs now with
+    // that title (and any title prepared meanwhile) protected from changes.
+    char scan_requester[MAX_TITLE_ID];
+    bool requester_scan =
+        game_mount_busy && peek_scan_now_requester(scan_requester) &&
+        sm_scanner_requester_may_scan_while_active(scan_requester) &&
+        consume_scan_now_request_for_requester(scan_requester, scan_reason,
+                                               sizeof(scan_reason),
+                                               &reset_attempts);
+    if (requester_scan ||
+        (!game_mount_busy &&
+         consume_scan_now_request(scan_reason, sizeof(scan_reason),
+                                  &reset_attempts))) {
+      if (requester_scan) {
+        runtime_set_scan_protected_title(scan_requester);
+        log_debug("  [SCAN] running requested scan while %s is active; "
+                  "that title is left untouched",
+                  scan_requester);
+      }
       if (reset_attempts) {
         size_t reset_title_count = reset_all_title_attempts();
         size_t reset_image_count = reset_all_image_mount_attempts();
@@ -2111,7 +2149,11 @@ void sm_scanner_run_loop(void) {
                   reset_title_count, reset_image_count);
       }
       bool unstable_found = false;
-      if (!run_full_scan_cycle(false, scan_reason, &unstable_found)) {
+      bool scan_completed =
+          run_full_scan_cycle(false, scan_reason, &unstable_found);
+      if (requester_scan)
+        runtime_set_scan_protected_title(NULL);
+      if (!scan_completed) {
         if (runtime_sleep_mode_active())
           continue;
         break;

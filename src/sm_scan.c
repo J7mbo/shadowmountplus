@@ -120,7 +120,8 @@ static bool is_blocked_ppsa_title(
 static bool request_blocked_ppsa_uninstall(const char *title_id,
                                            const char *source_path) {
   if (!title_id || title_id[0] == '\0' ||
-      blocked_ppsa_uninstall_requested(title_id))
+      blocked_ppsa_uninstall_requested(title_id) ||
+      runtime_scan_title_is_protected(title_id))
     return false;
 
   remember_blocked_ppsa_uninstall(title_id);

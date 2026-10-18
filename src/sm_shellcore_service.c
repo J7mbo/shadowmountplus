@@ -797,6 +797,22 @@ void sm_shellcore_end_external_mutation(void) {
   pthread_mutex_unlock(&g_service.mutex);
 }
 
+bool sm_shellcore_service_only_title_prepared(const char *title_id) {
+  if (!title_id || title_id[0] == '\0')
+    return false;
+
+  pthread_mutex_lock(&g_service.mutex);
+  bool prepared_ok = g_service.prepared.title_id[0] == '\0' ||
+                     (mount_owner_matches(&g_service.prepared, title_id) &&
+                      !g_service.prepared.game_exited);
+  bool only = prepared_ok && g_service.outgoing.title_id[0] == '\0' &&
+              !g_service.prepare_in_progress &&
+              !g_service.launch_pending &&
+              g_service.releasing_title_id[0] == '\0';
+  pthread_mutex_unlock(&g_service.mutex);
+  return only;
+}
+
 bool sm_shellcore_service_title_is_prepared(const char *title_id) {
   if (!title_id || title_id[0] == '\0')
     return false;

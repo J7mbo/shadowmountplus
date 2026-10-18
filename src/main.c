@@ -65,12 +65,18 @@ typedef struct {
   pthread_mutex_t reason_mutex;
   char reason[128];
   bool reset_attempts;
+  // Title that most recently asked for this scan while running, if any.
+  char requester_title_id[MAX_TITLE_ID];
 } immediate_scan_request_t;
 
 static immediate_scan_request_t g_scan_now = {
     .reason_mutex = PTHREAD_MUTEX_INITIALIZER,
     .reason = {0},
 };
+
+static pthread_mutex_t g_scan_protected_title_mutex =
+    PTHREAD_MUTEX_INITIALIZER;
+static char g_scan_protected_title_id[MAX_TITLE_ID];
 
 extern unsigned char config_ini_example[];
 extern unsigned int config_ini_example_len;
@@ -187,6 +193,7 @@ static void clear_scan_now_request(void) {
   pthread_mutex_lock(&g_scan_now.reason_mutex);
   g_scan_now.reason[0] = '\0';
   g_scan_now.reset_attempts = false;
+  g_scan_now.requester_title_id[0] = '\0';
   pthread_mutex_unlock(&g_scan_now.reason_mutex);
 }
 
@@ -240,6 +247,11 @@ bool request_scan_now(const char *reason) {
 }
 
 bool request_scan_now_with_options(const char *reason, bool reset_attempts) {
+  return request_scan_now_for_title(reason, reset_attempts, NULL);
+}
+
+bool request_scan_now_for_title(const char *reason, bool reset_attempts,
+                                const char *requester_title_id) {
   const char *resolved_reason =
       (reason && reason[0] != '\0') ? reason : "unknown scan source";
   if (runtime_sleep_mode_active())
@@ -260,6 +272,12 @@ bool request_scan_now_with_options(const char *reason, bool reset_attempts) {
   }
   if (reset_attempts)
     g_scan_now.reset_attempts = true;
+  // Requests without a requester never clear one: the merged scan is the
+  // same full scan, and the scanner re-validates the requester before use.
+  if (requester_title_id && requester_title_id[0] != '\0') {
+    (void)strlcpy(g_scan_now.requester_title_id, requester_title_id,
+                  sizeof(g_scan_now.requester_title_id));
+  }
   pthread_mutex_unlock(&g_scan_now.reason_mutex);
 
   if (should_log)
@@ -285,8 +303,76 @@ bool consume_scan_now_request(char *reason_out, size_t reason_out_size,
     *reset_attempts_out = g_scan_now.reset_attempts;
   g_scan_now.reason[0] = '\0';
   g_scan_now.reset_attempts = false;
+  g_scan_now.requester_title_id[0] = '\0';
   pthread_mutex_unlock(&g_scan_now.reason_mutex);
   return true;
+}
+
+bool peek_scan_now_requester(char requester_title_id_out[MAX_TITLE_ID]) {
+  requester_title_id_out[0] = '\0';
+  pthread_mutex_lock(&g_scan_now.reason_mutex);
+  bool available = g_scan_now.reason[0] != '\0' &&
+                   g_scan_now.requester_title_id[0] != '\0';
+  if (available) {
+    (void)strlcpy(requester_title_id_out, g_scan_now.requester_title_id,
+                  MAX_TITLE_ID);
+  }
+  pthread_mutex_unlock(&g_scan_now.reason_mutex);
+  return available;
+}
+
+bool consume_scan_now_request_for_requester(const char *requester_title_id,
+                                            char *reason_out,
+                                            size_t reason_out_size,
+                                            bool *reset_attempts_out) {
+  if (reason_out && reason_out_size > 0)
+    reason_out[0] = '\0';
+  if (reset_attempts_out)
+    *reset_attempts_out = false;
+  if (!requester_title_id || requester_title_id[0] == '\0')
+    return false;
+
+  pthread_mutex_lock(&g_scan_now.reason_mutex);
+  if (g_scan_now.reason[0] == '\0' ||
+      strcmp(g_scan_now.requester_title_id, requester_title_id) != 0) {
+    pthread_mutex_unlock(&g_scan_now.reason_mutex);
+    return false;
+  }
+  if (reason_out && reason_out_size > 0)
+    (void)strlcpy(reason_out, g_scan_now.reason, reason_out_size);
+  if (reset_attempts_out)
+    *reset_attempts_out = g_scan_now.reset_attempts;
+  g_scan_now.reason[0] = '\0';
+  g_scan_now.reset_attempts = false;
+  g_scan_now.requester_title_id[0] = '\0';
+  pthread_mutex_unlock(&g_scan_now.reason_mutex);
+  return true;
+}
+
+void runtime_set_scan_protected_title(const char *title_id) {
+  pthread_mutex_lock(&g_scan_protected_title_mutex);
+  if (title_id && title_id[0] != '\0') {
+    (void)strlcpy(g_scan_protected_title_id, title_id,
+                  sizeof(g_scan_protected_title_id));
+  } else {
+    g_scan_protected_title_id[0] = '\0';
+  }
+  pthread_mutex_unlock(&g_scan_protected_title_mutex);
+}
+
+bool runtime_scan_title_is_protected(const char *title_id) {
+  if (!title_id || title_id[0] == '\0')
+    return false;
+
+  pthread_mutex_lock(&g_scan_protected_title_mutex);
+  bool guard_active = g_scan_protected_title_id[0] != '\0';
+  bool is_requester =
+      guard_active && strcmp(g_scan_protected_title_id, title_id) == 0;
+  pthread_mutex_unlock(&g_scan_protected_title_mutex);
+  if (!guard_active)
+    return false;
+  // Also cover a title launched or switched to while the requester scan runs.
+  return is_requester || sm_shellcore_service_title_is_prepared(title_id);
 }
 
 bool sleep_with_stop_check(unsigned int total_us) {

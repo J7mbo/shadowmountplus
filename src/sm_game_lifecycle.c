@@ -64,6 +64,11 @@ static _Atomic bool g_pending_app_focus_valid;
 // Title storage is owned exclusively by the lifecycle thread. Other threads
 // consume only atomically published state through public helpers.
 static char g_active_game_title_id[MAX_TITLE_ID];
+// Copy of the active title for other threads, paired with the pid it was
+// published for. Readers trust it only while that pid is still active.
+static pthread_mutex_t g_shared_active_title_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char g_shared_active_title_id[MAX_TITLE_ID];
+static pid_t g_shared_active_title_pid;
 
 static bool register_game_exit_watch(int kq, pid_t pid);
 static void handle_game_exec(int kq, pid_t pid);
@@ -106,6 +111,11 @@ static void publish_active_game(pid_t pid, const char *title_id,
     g_active_game_title_id[0] = '\0';
     g_active_game_app_id = 0;
   }
+  pthread_mutex_lock(&g_shared_active_title_mutex);
+  (void)strlcpy(g_shared_active_title_id, g_active_game_title_id,
+                sizeof(g_shared_active_title_id));
+  g_shared_active_title_pid = g_active_game_title_id[0] != '\0' ? pid : 0;
+  pthread_mutex_unlock(&g_shared_active_title_mutex);
   publish_active_game_pid(pid);
 }
 
@@ -1244,6 +1254,31 @@ void stop_game_lifecycle_watcher(void) {
 bool sm_game_lifecycle_has_active_game(void) {
   return atomic_load(&g_active_game_pid) > 0 ||
          atomic_load(&g_game_exit_handoff_pending);
+}
+
+bool sm_game_lifecycle_get_active_title(char title_id_out[MAX_TITLE_ID]) {
+  title_id_out[0] = '\0';
+  if (atomic_load(&g_game_exit_handoff_pending))
+    return false;
+  pid_t pid = atomic_load(&g_active_game_pid);
+  if (pid <= 0)
+    return false;
+
+  pthread_mutex_lock(&g_shared_active_title_mutex);
+  bool matches = g_shared_active_title_pid == pid &&
+                 g_shared_active_title_id[0] != '\0';
+  if (matches) {
+    (void)strlcpy(title_id_out, g_shared_active_title_id, MAX_TITLE_ID);
+  }
+  pthread_mutex_unlock(&g_shared_active_title_mutex);
+
+  // Reject a snapshot that raced with exit or a process handoff.
+  if (!matches || atomic_load(&g_active_game_pid) != pid ||
+      atomic_load(&g_game_exit_handoff_pending)) {
+    title_id_out[0] = '\0';
+    return false;
+  }
+  return true;
 }
 
 void sm_game_lifecycle_note_app_focus(uint32_t app_id) {

@@ -162,7 +162,7 @@ paths:
     post:
       operationId: rescan
       summary: Queue an immediate full rescan
-      description: Retry counters are preserved by default. With reset_attempts=true, all title registration/install-remount and path-owned image-mount retry counters are reset immediately before the requested scan starts. If game runtime mounts are busy, the request remains queued until scanning is safe.
+      description: Retry counters are preserved by default. With reset_attempts=true, all title registration/install-remount and path-owned image-mount retry counters are reset immediately before the requested scan starts. If game runtime mounts are busy, the request remains queued until scanning is safe, unless requester_title_id names the running game and that title is an eligible managed folder source; that scan then runs immediately and leaves the requester untouched.
       tags: [Scanner]
       requestBody:
         $ref: "#/components/requestBodies/ScanRequest"
@@ -1239,6 +1239,10 @@ components:
           type: boolean
           default: false
           description: Reset title install/mount and image-mount retry counters immediately before this requested full scan starts.
+        requester_title_id:
+          type: string
+          pattern: "^(PPSA|CUSA|LAPY|FAKE)[0-9]{5}$"
+          description: Title ID of the running app requesting this scan, read by the app at runtime. When it is the only running game, the only ShellCore-held runtime, and a managed folder source, the scan runs immediately instead of waiting for the app to exit, and never mutates that title.
 
     MountRequest:
       type: object
@@ -1434,8 +1438,8 @@ components:
           type: array
           items:
             type: string
-            enum: [web_ui, storage_space, list_images, list_games, game_info, game_icon, mount_game, unmount_game, uninstall_game, move_game_source, copy_game_source, delete_game_source, unpack_game_image, storage_job_status, storage_job_cancel, list_manual_sources, add_manual_source, remove_manual_source, manage_settings, read_debug_log, read_kernel_log, rescan]
-          example: [web_ui, storage_space, list_images, list_games, game_info, game_icon, mount_game, unmount_game, uninstall_game, move_game_source, copy_game_source, delete_game_source, unpack_game_image, storage_job_status, storage_job_cancel, list_manual_sources, add_manual_source, remove_manual_source, manage_settings, read_debug_log, read_kernel_log, rescan]
+            enum: [web_ui, storage_space, list_images, list_games, game_info, game_icon, mount_game, unmount_game, uninstall_game, move_game_source, copy_game_source, delete_game_source, unpack_game_image, storage_job_status, storage_job_cancel, list_manual_sources, add_manual_source, remove_manual_source, manage_settings, read_debug_log, read_kernel_log, rescan, rescan_requester_title]
+          example: [web_ui, storage_space, list_images, list_games, game_info, game_icon, mount_game, unmount_game, uninstall_game, move_game_source, copy_game_source, delete_game_source, unpack_game_image, storage_job_status, storage_job_cancel, list_manual_sources, add_manual_source, remove_manual_source, manage_settings, read_debug_log, read_kernel_log, rescan, rescan_requester_title]
 
     StorageMount:
       type: object

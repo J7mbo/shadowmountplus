@@ -11,6 +11,7 @@
 #include "sm_limits.h"
 #include "sm_log.h"
 #include "sm_path_utils.h"
+#include "sm_runtime.h"
 #include "sm_time.h"
 #include "sm_title_state.h"
 
@@ -358,6 +359,8 @@ void reconcile_missing_app_db_games(void) {
       break;
 
     if (!app_db_title_list_contains(&auto_remove_titles, title_id))
+      continue;
+    if (runtime_scan_title_is_protected(title_id))
       continue;
     if (title_is_protected_by_dlc(title_id,
                                   cfg.auto_remove_games_with_dlc))

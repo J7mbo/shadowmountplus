@@ -1413,12 +1413,19 @@ typedef struct {
   bool force_remove_matching_source;
   bool match_usb_sources;
   bool preserve_mount_links;
+  // Scan-driven cleanup only: leave a requester scan's protected titles alone.
+  bool skip_scan_protected_titles;
 } cleanup_mount_links_ctx_t;
 
 static bool cleanup_mount_links_entry(const char *title_id,
                                       const title_link_paths_t *paths,
                                       void *ctx_ptr) {
   cleanup_mount_links_ctx_t *ctx = (cleanup_mount_links_ctx_t *)ctx_ptr;
+
+  // A requester scan never cleans up the running title's own mounts.
+  if (ctx->skip_scan_protected_titles &&
+      runtime_scan_title_is_protected(title_id))
+    return true;
 
   struct stat lst;
   if (stat(paths->mount_link, &lst) != 0 || !S_ISREG(lst.st_mode))
@@ -1550,6 +1557,7 @@ void cleanup_mount_links(const char *removed_source_root,
       .force_remove_matching_source = false,
       .match_usb_sources = false,
       .preserve_mount_links = false,
+      .skip_scan_protected_titles = true,
   };
   for_each_title_app_dir("", !unmount_system_ex_bind, cleanup_mount_links_entry,
                          &ctx);

@@ -203,6 +203,7 @@ def test_version(client: ApiClient) -> None:
         "web_ui",
         "storage_space",
         "rescan",
+        "rescan_requester_title",
         "uninstall_game",
         "game_info",
         "game_icon",
@@ -574,6 +575,15 @@ def test_rescan(client: ApiClient) -> None:
         "rescan reset attempts without an explicit option",
     )
     print("[API-TEST] full rescan=QUEUED")
+
+    http_status, response = client.post(
+        ROUTE_SCAN, {"requester_title_id": "NOT-A-TITLE"}
+    )
+    require(
+        http_status == 400,
+        f"invalid requester_title_id returned HTTP {http_status}",
+    )
+    print("[API-TEST] rescan requester validation=PASS")
 
 
 def test_manual_list(client: ApiClient) -> int:
