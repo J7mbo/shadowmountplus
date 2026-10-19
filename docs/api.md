@@ -64,13 +64,13 @@ device.
 | `/api/v1/games/icon?title_id=PPSA12345[&size=thumb]` | GET | Stream the full PNG or a cached 128x128 thumbnail |
 | `/api/v1/games/mount` | `{"title_id":"PPSA12345","mode":"ro"}` | Mount a managed game, optionally overriding its image mode with `ro`/`rw` |
 | `/api/v1/games/unmount` | `{"title_id":"PPSA12345"}` | Unmount a managed game |
-| `/api/v1/games/uninstall` | `{"title_id":"PPSA12345"}` | Request uninstallation through AppInstUtil |
+| `/api/v1/games/uninstall` | `{"title_id":"PPSA12345","requester_title_id":"PPSA54321"}` | Request uninstallation through AppInstUtil. `requester_title_id` is optional |
 | `/api/v1/games/move` | `{"title_id":"PPSA12345","destination_dir":"/mnt/usb1/games"}` | Start an asynchronous move job |
 | `/api/v1/games/copy` | `{"title_id":"PPSA12345","destination_dir":"/mnt/usb1/games"}` | Start an asynchronous copy job |
 | `/api/v1/games/unpack` | `{"title_id":"PPSA12345","destination_dir":"/mnt/usb1/games","delete_source":false}` | Mount an image read-only and asynchronously copy the game into a folder |
 | `/api/v1/games/storage/status` | `{"job_id":1}` | Get current or last storage job status; `job_id` is optional |
 | `/api/v1/games/storage/cancel` | `{"job_id":1}` | Request cancellation while the active job is still cancellable |
-| `/api/v1/games/delete` | `{"title_id":"PPSA12345","confirm":true}` | Start asynchronous permanent deletion of the physical source |
+| `/api/v1/games/delete` | `{"title_id":"PPSA12345","confirm":true,"requester_title_id":"PPSA54321"}` | Start asynchronous permanent deletion of the physical source. `requester_title_id` is optional |
 
 Example:
 
@@ -113,7 +113,7 @@ A successful version response has this shape:
   "status": 0,
   "api_version": 1,
   "shadowmount_version": "1.7",
-  "capabilities": ["web_ui", "storage_space", "list_images", "list_games", "game_info", "game_icon", "mount_game", "unmount_game", "uninstall_game", "move_game_source", "copy_game_source", "delete_game_source", "unpack_game_image", "storage_job_status", "storage_job_cancel", "list_manual_sources", "add_manual_source", "remove_manual_source", "manage_settings", "read_debug_log", "read_kernel_log", "rescan", "rescan_requester_title"]
+  "capabilities": ["web_ui", "storage_space", "list_images", "list_games", "game_info", "game_icon", "mount_game", "unmount_game", "uninstall_game", "move_game_source", "copy_game_source", "delete_game_source", "unpack_game_image", "storage_job_status", "storage_job_cancel", "list_manual_sources", "add_manual_source", "remove_manual_source", "manage_settings", "read_debug_log", "read_kernel_log", "rescan", "rescan_requester_title", "delete_requester_title", "uninstall_requester_title"]
 }
 ```
 
@@ -272,6 +272,23 @@ waits like any other scan. The response reports `scan_deferred=false` when the
 requester is eligible at response time; eligibility is checked again when the
 scan starts. Several merged requests use the most recent requester. Servers
 supporting this field list `rescan_requester_title` in `capabilities`.
+
+The same app can delete or uninstall *another* game while it runs by passing
+its own title ID as `requester_title_id` to `/api/v1/games/delete` and
+`/api/v1/games/uninstall`. Without it, both are refused with `game_active` (or
+`runtime_prepared`) while any game runs. With it, they go ahead when the
+requester is eligible exactly as for a requester scan (the only tracked running
+game, the only runtime ShellCore holds, a managed folder source), and:
+
+- the requester can never delete or uninstall itself: naming itself as the
+  target is refused with `game_active`, as is a delete whose source the
+  requester shares;
+- the scan a delete or an uninstall queues afterwards is requested on the
+  requester's behalf, so it runs immediately and leaves the requester alone.
+
+Eligibility is checked when the request arrives and again when a delete job
+releases the source. Servers supporting this field list
+`delete_requester_title` and `uninstall_requester_title` in `capabilities`.
 
 Manual entries are direct paths to individual game directories or image files;
 they are not recursive scan roots. Updates atomically replace `manual.lst` and preserve comments and

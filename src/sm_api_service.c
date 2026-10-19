@@ -110,6 +110,8 @@ typedef struct {
   char runtime_source[MAX_PATH];
   char destination[MAX_PATH];
   bool delete_source;
+  // A running title that asked for this delete (see requester_may_mutate).
+  char requester_title_id[MAX_TITLE_ID];
   uint64_t total_bytes;
   uint64_t processed_bytes;
   uint64_t total_files;
@@ -631,7 +633,9 @@ static void handle_version(struct MHD_Connection *fd) {
       !append_json_string(capabilities, "read_debug_log") ||
       !append_json_string(capabilities, "read_kernel_log") ||
       !append_json_string(capabilities, "rescan") ||
-      !append_json_string(capabilities, "rescan_requester_title")) {
+      !append_json_string(capabilities, "rescan_requester_title") ||
+      !append_json_string(capabilities, "delete_requester_title") ||
+      !append_json_string(capabilities, "uninstall_requester_title")) {
     json_object_put(capabilities);
     json_object_put(response);
     send_out_of_memory_response(fd);
@@ -1671,6 +1675,26 @@ static bool add_scan_queue_fields(struct json_object *response, bool queued) {
   return add_scan_queue_fields_for_requester(response, queued, NULL);
 }
 
+// The optional requester_title_id of a request: NULL when absent. Sends a 400
+// and returns false when it is present but not a title ID.
+static bool get_optional_requester_title_id(struct MHD_Connection *fd,
+                                            struct json_object *request,
+                                            const char **requester_out) {
+  *requester_out = NULL;
+  struct json_object *requester_value = NULL;
+  if (!json_object_object_get_ex(request, "requester_title_id",
+                                 &requester_value))
+    return true;
+  if (!json_object_is_type(requester_value, json_type_string) ||
+      !is_supported_game_title_id(json_object_get_string(requester_value))) {
+    send_error_response(fd, 400, EINVAL,
+                        "requester_title_id must be a valid title ID");
+    return false;
+  }
+  *requester_out = json_object_get_string(requester_value);
+  return true;
+}
+
 static void handle_scan(struct MHD_Connection *fd,
                         struct json_object *request) {
   if (runtime_sleep_mode_active()) {
@@ -1688,18 +1712,8 @@ static void handle_scan(struct MHD_Connection *fd,
   // Optional: the running title asking for this scan. When it is the active
   // game, the scan runs now instead of waiting for that title to exit.
   const char *requester_title_id = NULL;
-  struct json_object *requester_value = NULL;
-  if (json_object_object_get_ex(request, "requester_title_id",
-                                &requester_value)) {
-    if (!json_object_is_type(requester_value, json_type_string) ||
-        !is_supported_game_title_id(
-            json_object_get_string(requester_value))) {
-      send_error_response(fd, 400, EINVAL,
-                          "requester_title_id must be a valid title ID");
-      return;
-    }
-    requester_title_id = json_object_get_string(requester_value);
-  }
+  if (!get_optional_requester_title_id(fd, request, &requester_title_id))
+    return;
 
   if (!request_scan_now_for_title("HTTP API request", reset_attempts,
                                   requester_title_id)) {
@@ -2157,14 +2171,36 @@ static void handle_kernel_log(struct MHD_Connection *connection,
                          "total_bytes");
 }
 
-static const char *runtime_mutation_block_reason(void) {
+// A running title may have another title deleted or uninstalled while it
+// runs when it is the eligible requester of a scan (the only running game, the
+// only runtime ShellCore holds, a managed folder source: see
+// sm_scanner_requester_may_scan_while_active), and never itself.
+static bool requester_may_mutate(const char *requester_title_id,
+                                 const char *target_title_id) {
+  return requester_title_id && requester_title_id[0] != '\0' &&
+         target_title_id && target_title_id[0] != '\0' &&
+         strcmp(requester_title_id, target_title_id) != 0 &&
+         sm_scanner_requester_may_scan_while_active(requester_title_id);
+}
+
+static const char *runtime_mutation_block_reason_for(
+    const char *requester_title_id, const char *target_title_id) {
   if (runtime_sleep_mode_active())
     return "rest_mode";
-  if (sm_game_lifecycle_has_active_game())
+  if (sm_game_lifecycle_has_active_game() &&
+      !requester_may_mutate(requester_title_id, target_title_id))
     return "game_active";
   if (sm_install_has_pending_work())
     return "install_pending";
   return NULL;
+}
+
+// ShellCore holds a runtime that isn't the target's own: only the eligible
+// requester's may be held while another title is changed.
+static bool prepared_runtime_blocks(const char *requester_title_id,
+                                    const char *target_title_id) {
+  return sm_shellcore_service_has_prepared_mount() &&
+         !requester_may_mutate(requester_title_id, target_title_id);
 }
 
 static int resolve_storage_source(const char *title_id,
@@ -2189,10 +2225,11 @@ static int resolve_storage_source(const char *title_id,
 }
 
 static int request_game_uninstall(const char *title_id,
+                                  const char *requester_title_id,
                                   const char **error_out,
                                   bool *scan_queued_out) {
   *scan_queued_out = false;
-  *error_out = runtime_mutation_block_reason();
+  *error_out = runtime_mutation_block_reason_for(requester_title_id, title_id);
   if (*error_out)
     return EBUSY;
   sm_game_cache_snapshot_entry_t package;
@@ -2203,7 +2240,7 @@ static int request_game_uninstall(const char *title_id,
     return ENOENT;
 
   bool title_prepared = sm_shellcore_service_title_is_prepared(title_id);
-  if (sm_shellcore_service_has_prepared_mount() && !title_prepared) {
+  if (prepared_runtime_blocks(requester_title_id, title_id) && !title_prepared) {
     *error_out = "runtime_prepared";
     return EBUSY;
   }
@@ -2235,7 +2272,9 @@ static int request_game_uninstall(const char *title_id,
   invalidate_app_db_title_cache();
   reset_title_attempts(title_id, NULL, NULL);
   if (source_missing)
-    *scan_queued_out = request_scan_now("HTTP API missing source uninstall requested");
+    *scan_queued_out = request_scan_now_for_title(
+        "HTTP API missing source uninstall requested", false,
+        requester_title_id);
   log_debug("  [API] uninstall requested: title=%s", title_id);
   return 0;
 }
@@ -2248,6 +2287,10 @@ static void handle_uninstall(struct MHD_Connection *fd,
                         "title_id must be a valid PS4 or PS5 title ID");
     return;
   }
+  // Optional: the running title asking (see requester_may_mutate).
+  const char *requester_title_id = NULL;
+  if (!get_optional_requester_title_id(fd, request, &requester_title_id))
+    return;
 
   if (!sm_scanner_try_begin_external_mutation()) {
     send_operation_error_response(fd, EBUSY, "scanner_busy");
@@ -2260,7 +2303,8 @@ static void handle_uninstall(struct MHD_Connection *fd,
   }
   const char *error = NULL;
   bool scan_queued = false;
-  int status = request_game_uninstall(title_id, &error, &scan_queued);
+  int status = request_game_uninstall(title_id, requester_title_id, &error,
+                                      &scan_queued);
   sm_shellcore_end_external_mutation();
   sm_scanner_end_external_mutation();
   if (status != 0) {
@@ -2276,7 +2320,8 @@ static void handle_uninstall(struct MHD_Connection *fd,
     return;
   }
   if (!add_json_string(response, "title_id", title_id) ||
-      !add_scan_queue_fields(response, scan_queued) ||
+      !add_scan_queue_fields_for_requester(response, scan_queued,
+                                           requester_title_id) ||
       !add_json_bool(response, "uninstall_requested", true)) {
     json_object_put(response);
     send_out_of_memory_response(fd);
@@ -2526,13 +2571,14 @@ static int count_titles_for_source(const char *physical_path,
 
 static int release_storage_source_runtime(const char *physical_path,
                                           const char *title_id,
+                                          const char *requester_title_id,
                                           size_t *affected_out,
                                           const char **error_out) {
   *affected_out = 0;
-  *error_out = runtime_mutation_block_reason();
+  *error_out = runtime_mutation_block_reason_for(requester_title_id, title_id);
   if (*error_out)
     return EBUSY;
-  if (sm_shellcore_service_has_prepared_mount()) {
+  if (prepared_runtime_blocks(requester_title_id, title_id)) {
     *error_out = "runtime_prepared";
     return EBUSY;
   }
@@ -2549,6 +2595,13 @@ static int release_storage_source_runtime(const char *physical_path,
     if (!resolve_game_source(&snapshot[i], &info) ||
         strcmp(info.physical_path, physical_path) != 0) {
       continue;
+    }
+    // The requester itself is never released (it runs from this source).
+    if (requester_title_id && requester_title_id[0] != '\0' &&
+        strcmp(snapshot[i].title_id, requester_title_id) == 0) {
+      status = EBUSY;
+      *error_out = "game_active";
+      break;
     }
     (*affected_out)++;
     if (is_data_mounted(snapshot[i].title_id) &&
@@ -2901,11 +2954,14 @@ static void *storage_job_thread_main(void *arg) {
   char source[MAX_PATH];
   char runtime_source[MAX_PATH];
   char destination[MAX_PATH];
+  char requester_title_id[MAX_TITLE_ID];
   bool delete_source;
   game_storage_operation_t operation;
 
   pthread_mutex_lock(&g_storage_job.mutex);
   (void)strlcpy(title_id, g_storage_job.title_id, sizeof(title_id));
+  (void)strlcpy(requester_title_id, g_storage_job.requester_title_id,
+                sizeof(requester_title_id));
   (void)strlcpy(source, g_storage_job.source, sizeof(source));
   (void)strlcpy(runtime_source, g_storage_job.runtime_source,
                 sizeof(runtime_source));
@@ -2965,7 +3021,8 @@ static void *storage_job_thread_main(void *arg) {
   if (status == 0 && operation != GAME_STORAGE_UNPACK) {
     size_t affected = 0;
     recovery_scan_needed = true;
-    status = release_storage_source_runtime(source, title_id, &affected,
+    status = release_storage_source_runtime(source, title_id,
+                                             requester_title_id, &affected,
                                              &error);
     pthread_mutex_lock(&g_storage_job.mutex);
     if (g_storage_job.id == job_id)
@@ -3075,7 +3132,8 @@ static void *storage_job_thread_main(void *arg) {
 
   bool scan_queued = false;
   if (recovery_scan_needed) {
-    scan_queued = request_scan_now(
+    // A requester's delete reconciles now, not once the requester exits.
+    scan_queued = request_scan_now_for_title(
         status != 0
             ? "HTTP API async storage operation recovery"
             : operation == GAME_STORAGE_MOVE
@@ -3084,7 +3142,8 @@ static void *storage_job_thread_main(void *arg) {
                         ? "HTTP API async game source copied"
                         : operation == GAME_STORAGE_UNPACK
                               ? "HTTP API game image unpacked"
-                              : "HTTP API async game source deleted");
+                              : "HTTP API async game source deleted",
+        false, requester_title_id);
   }
   log_debug("  [API] async game source %s %s: job=%llu title=%s status=%d reason=%s",
             game_storage_operation_name(operation),
@@ -3099,6 +3158,7 @@ static int start_storage_job(const char *title_id,
                              const char *destination_dir,
                              game_storage_operation_t operation,
                              bool delete_source,
+                             const char *requester_title_id,
                              storage_job_snapshot_t *accepted_out,
                              const char **error_out) {
   game_source_info_t source_info;
@@ -3153,6 +3213,9 @@ static int start_storage_job(const char *title_id,
                 sizeof(g_storage_job.destination));
   g_storage_job.delete_source =
       operation == GAME_STORAGE_UNPACK && delete_source;
+  (void)strlcpy(g_storage_job.requester_title_id,
+                requester_title_id ? requester_title_id : "",
+                sizeof(g_storage_job.requester_title_id));
   g_storage_job.total_bytes = 0;
   g_storage_job.processed_bytes = 0;
   g_storage_job.total_files = 0;
@@ -3333,6 +3396,14 @@ static void handle_game_storage_operation(
     }
   }
 
+  // Optional, for a delete only: the running title asking (see
+  // requester_may_mutate).
+  const char *requester_title_id = NULL;
+  if (operation == GAME_STORAGE_DELETE &&
+      !get_optional_requester_title_id(connection, request,
+                                       &requester_title_id))
+    return;
+
   bool delete_source = false;
   if (operation == GAME_STORAGE_UNPACK &&
       !get_optional_bool(request, "delete_source", false, &delete_source)) {
@@ -3345,7 +3416,8 @@ static void handle_game_storage_operation(
   memset(&accepted, 0, sizeof(accepted));
   const char *error = NULL;
   int status = start_storage_job(title_id, destination_dir, operation,
-                                 delete_source, &accepted, &error);
+                                 delete_source, requester_title_id, &accepted,
+                                 &error);
   if (status != 0) {
     if (operation == GAME_STORAGE_DELETE && error &&
         strcmp(error, "source_missing") == 0) {

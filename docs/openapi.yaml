@@ -848,7 +848,7 @@ paths:
       summary: Request game uninstallation
       tags: [Games]
       requestBody:
-        $ref: "#/components/requestBodies/TitleRequest"
+        $ref: "#/components/requestBodies/UninstallRequest"
       responses:
         "200":
           $ref: "#/components/responses/UninstallSuccess"
@@ -898,6 +898,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/TitleRequest"
+    UninstallRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UninstallRequest"
     MountRequest:
       required: true
       content:
@@ -1224,6 +1230,20 @@ components:
         title_id:
           $ref: "#/components/schemas/TitleId"
 
+    RequesterTitleId:
+      type: string
+      pattern: "^(PPSA|CUSA|LAPY|FAKE)[0-9]{5}$"
+      description: Title ID of the running app asking, read by the app at runtime. When it is the only running game, the only ShellCore-held runtime and a managed folder source, the request goes ahead while it runs instead of being refused with game_active, provided it names another title. The scan it queues runs immediately and never mutates the requester.
+
+    UninstallRequest:
+      type: object
+      required: [title_id]
+      properties:
+        title_id:
+          $ref: "#/components/schemas/TitleId"
+        requester_title_id:
+          $ref: "#/components/schemas/RequesterTitleId"
+
     GamesListRequest:
       type: object
       properties:
@@ -1285,6 +1305,8 @@ components:
         confirm:
           type: boolean
           const: true
+        requester_title_id:
+          $ref: "#/components/schemas/RequesterTitleId"
 
     StorageUnpackRequest:
       type: object
@@ -1438,8 +1460,8 @@ components:
           type: array
           items:
             type: string
-            enum: [web_ui, storage_space, list_images, list_games, game_info, game_icon, mount_game, unmount_game, uninstall_game, move_game_source, copy_game_source, delete_game_source, unpack_game_image, storage_job_status, storage_job_cancel, list_manual_sources, add_manual_source, remove_manual_source, manage_settings, read_debug_log, read_kernel_log, rescan, rescan_requester_title]
-          example: [web_ui, storage_space, list_images, list_games, game_info, game_icon, mount_game, unmount_game, uninstall_game, move_game_source, copy_game_source, delete_game_source, unpack_game_image, storage_job_status, storage_job_cancel, list_manual_sources, add_manual_source, remove_manual_source, manage_settings, read_debug_log, read_kernel_log, rescan, rescan_requester_title]
+            enum: [web_ui, storage_space, list_images, list_games, game_info, game_icon, mount_game, unmount_game, uninstall_game, move_game_source, copy_game_source, delete_game_source, unpack_game_image, storage_job_status, storage_job_cancel, list_manual_sources, add_manual_source, remove_manual_source, manage_settings, read_debug_log, read_kernel_log, rescan, rescan_requester_title, delete_requester_title, uninstall_requester_title]
+          example: [web_ui, storage_space, list_images, list_games, game_info, game_icon, mount_game, unmount_game, uninstall_game, move_game_source, copy_game_source, delete_game_source, unpack_game_image, storage_job_status, storage_job_cancel, list_manual_sources, add_manual_source, remove_manual_source, manage_settings, read_debug_log, read_kernel_log, rescan, rescan_requester_title, delete_requester_title, uninstall_requester_title]
 
     StorageMount:
       type: object
