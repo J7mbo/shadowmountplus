@@ -195,17 +195,23 @@ static void finish_prepared_title(const char *title_id,
   pthread_mutex_unlock(&g_service.mutex);
 }
 
+// requester: an uninstall the API allowed for a running requester title
+// (requester_title_id). That requester is then the only title ShellCore
+// holds, and the uninstall holds the external mutation itself: neither
+// stops releasing the other title it asked to uninstall.
 static int begin_runtime_release(const char *title_id,
-                                 bool public_request) {
+                                 bool public_request, bool requester) {
   pthread_mutex_lock(&g_service.mutex);
   shellcore_mount_owner_t *owner = find_mount_owner_locked(title_id);
   bool prepared = owner == &g_service.prepared;
   bool has_owner = g_service.prepared.title_id[0] != '\0' ||
                    g_service.outgoing.title_id[0] != '\0';
   bool different_title = has_owner && !owner;
-  bool blocked = different_title || g_service.releasing_title_id[0] != '\0' ||
+  bool blocked = (different_title && !requester) ||
+                 g_service.releasing_title_id[0] != '\0' ||
                  (prepared && g_service.prepare_in_progress) ||
-                 (public_request && g_service.external_mutation_in_progress) ||
+                 (public_request && !requester &&
+                  g_service.external_mutation_in_progress) ||
                  (public_request && prepared &&
                   (g_service.launch_pending || g_service.prepared.app_id != 0));
   if (!blocked) {
@@ -427,7 +433,7 @@ static bool prepare_title_runtime(const char *title_id,
 }
 
 static bool release_title_runtime(const char *title_id,
-                                  bool public_request);
+                                  bool public_request, bool requester);
 
 static int mount_managed_title_runtime(const char *title_id,
                                        bool allow_unmanaged,
@@ -527,7 +533,7 @@ static int unmount_title_runtime(const char *title_id,
   char source_path[MAX_PATH];
   if (!read_mount_link(title_id, source_path, sizeof(source_path)))
     return ENOENT;
-  bool released = release_title_runtime(title_id, true);
+  bool released = release_title_runtime(title_id, true, requester_running);
   int status = released ? 0 : (errno == EBUSY ? EBUSY : EIO);
   return status;
 }
@@ -592,10 +598,10 @@ static bool release_backing_image(const char *title_id) {
 }
 
 static bool release_title_runtime(const char *title_id,
-                                  bool public_request) {
+                                  bool public_request, bool requester) {
   if (!title_id || title_id[0] == '\0')
     return false;
-  int begin_status = begin_runtime_release(title_id, public_request);
+  int begin_status = begin_runtime_release(title_id, public_request, requester);
   if (begin_status != 0) {
     errno = begin_status;
     return false;
@@ -644,7 +650,7 @@ static bool release_title_runtime(const char *title_id,
 }
 
 bool sm_shellcore_release_title_runtime(const char *title_id) {
-  return release_title_runtime(title_id, false);
+  return release_title_runtime(title_id, false, false);
 }
 
 void sm_shellcore_service_bind_prepared_app(const char *title_id,
@@ -758,7 +764,7 @@ int sm_shellcore_service_release_exited_titles(void) {
 
     log_debug("  [SHELLCORE] title sandbox gone; releasing runtime: %s",
               title_id);
-    if (!release_title_runtime(title_id, false)) {
+    if (!release_title_runtime(title_id, false, false)) {
       release_error = errno != 0 ? errno : EIO;
       log_debug("  [SHELLCORE] sandbox-triggered release incomplete; scanner "
                 "cleanup will retry: %s (%s)",

@@ -20,8 +20,9 @@ bool sm_shellcore_release_title_runtime(const char *title_id);
 int sm_shellcore_mount_title_runtime(const char *title_id,
                                      const bool *mount_read_only_override);
 int sm_shellcore_unmount_title_runtime(const char *title_id);
-// As above, for a request the API already allowed while an eligible requester
-// title runs (requester_title_id): that running requester doesn't stop
+// As above, for an uninstall the API already allowed while an eligible
+// requester title runs (requester_title_id): neither that running requester
+// (the title ShellCore holds) nor the uninstall's own external mutation stops
 // another title's runtime being released.
 int sm_shellcore_unmount_title_runtime_for_requester(const char *title_id);
 // Bind the prepared managed title to the app id stored in LncApplication.
