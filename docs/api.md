@@ -284,7 +284,11 @@ game, the only runtime ShellCore holds, a managed folder source), and:
   target is refused with `game_active`, as is a delete whose source the
   requester shares;
 - the scan a delete or an uninstall queues afterwards is requested on the
-  requester's behalf, so it runs immediately and leaves the requester alone.
+  requester's behalf, so it runs immediately and leaves the requester alone;
+- an uninstall releases the target's runtime mount (`/system_ex/app/<title>`)
+  while the requester runs, as it would with no game running. Without this, a
+  folder game still attached since it was installed was refused with
+  `title_unmount_busy` until it had been launched or the console restarted.
 
 Eligibility is checked when the request arrives and again when a delete job
 releases the source. Servers supporting this field list

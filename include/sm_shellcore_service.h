@@ -20,6 +20,10 @@ bool sm_shellcore_release_title_runtime(const char *title_id);
 int sm_shellcore_mount_title_runtime(const char *title_id,
                                      const bool *mount_read_only_override);
 int sm_shellcore_unmount_title_runtime(const char *title_id);
+// As above, for a request the API already allowed while an eligible requester
+// title runs (requester_title_id): that running requester doesn't stop
+// another title's runtime being released.
+int sm_shellcore_unmount_title_runtime_for_requester(const char *title_id);
 // Bind the prepared managed title to the app id stored in LncApplication.
 void sm_shellcore_service_bind_prepared_app(const char *title_id,
                                             uint32_t app_id, pid_t pid);

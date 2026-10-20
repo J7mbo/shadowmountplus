@@ -515,12 +515,13 @@ int sm_shellcore_mount_title_runtime(
                                      mount_read_only_override);
 }
 
-int sm_shellcore_unmount_title_runtime(const char *title_id) {
+static int unmount_title_runtime(const char *title_id,
+                                 bool requester_running) {
   if (!is_supported_game_title_id(title_id))
     return EINVAL;
   if (runtime_sleep_mode_active())
     return EBUSY;
-  if (sm_game_lifecycle_has_active_game())
+  if (!requester_running && sm_game_lifecycle_has_active_game())
     return EBUSY;
 
   char source_path[MAX_PATH];
@@ -529,6 +530,14 @@ int sm_shellcore_unmount_title_runtime(const char *title_id) {
   bool released = release_title_runtime(title_id, true);
   int status = released ? 0 : (errno == EBUSY ? EBUSY : EIO);
   return status;
+}
+
+int sm_shellcore_unmount_title_runtime(const char *title_id) {
+  return unmount_title_runtime(title_id, false);
+}
+
+int sm_shellcore_unmount_title_runtime_for_requester(const char *title_id) {
+  return unmount_title_runtime(title_id, true);
 }
 
 static size_t read_other_owned_image_chain(

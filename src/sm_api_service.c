@@ -2245,7 +2245,12 @@ static int request_game_uninstall(const char *title_id,
     return EBUSY;
   }
   if (!installed_pkg && (title_prepared || is_data_mounted(title_id))) {
-    int release_status = sm_shellcore_unmount_title_runtime(title_id);
+    // A requester allowed above is itself the running game: it mustn't
+    // block releasing the title it asked to uninstall.
+    int release_status =
+        requester_may_mutate(requester_title_id, title_id)
+            ? sm_shellcore_unmount_title_runtime_for_requester(title_id)
+            : sm_shellcore_unmount_title_runtime(title_id);
     if (release_status != 0) {
       if (release_status == EBUSY)
         *error_out = "title_unmount_busy";
