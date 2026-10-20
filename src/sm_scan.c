@@ -882,7 +882,11 @@ void cleanup_lost_sources_before_scan(void) {
   // 2) Drop stale game cache entries for deleted sources.
   prune_game_cache();
   // 3) Recover or remove stale image mounts before validating their title links.
-  cleanup_stale_image_mounts();
+  //    Not in a requester scan: an image may back a title ShellCore prepares
+  //    meanwhile, and the image cache can't tell which. The next ordinary
+  //    scan does it, as every scan did while a game ran before requesters.
+  if (!runtime_scan_protection_active())
+    cleanup_stale_image_mounts();
   // 4) Drop stale/broken mount links and unmount stale /system_ex stacks.
   runtime_mount_state_lock();
   cleanup_mount_links(NULL, true);
@@ -894,7 +898,8 @@ void cleanup_lost_sources_before_scan(void) {
 void cleanup_lost_sources_for_scan_root(const char *scan_root) {
   sm_image_index_prune();
   prune_game_cache_for_root(scan_root);
-  cleanup_stale_image_mounts_for_root(scan_root);
+  if (!runtime_scan_protection_active()) // see cleanup_lost_sources_before_scan
+    cleanup_stale_image_mounts_for_root(scan_root);
   runtime_mount_state_lock();
   cleanup_mount_links(scan_root, true);
   runtime_mount_state_unlock();

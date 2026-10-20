@@ -56,6 +56,8 @@ void runtime_set_scan_protected_title(const char *title_id);
 // requester title itself, or any title ShellCore currently has prepared.
 // Always false outside a requester scan.
 bool runtime_scan_title_is_protected(const char *title_id);
+// Return true while a requester scan runs (its guard is set).
+bool runtime_scan_protection_active(void);
 // Sleep in chunks and stop early if shutdown was requested.
 bool sleep_with_stop_check(unsigned int total_us);
 

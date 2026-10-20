@@ -360,6 +360,13 @@ void runtime_set_scan_protected_title(const char *title_id) {
   pthread_mutex_unlock(&g_scan_protected_title_mutex);
 }
 
+bool runtime_scan_protection_active(void) {
+  pthread_mutex_lock(&g_scan_protected_title_mutex);
+  bool active = g_scan_protected_title_id[0] != '\0';
+  pthread_mutex_unlock(&g_scan_protected_title_mutex);
+  return active;
+}
+
 bool runtime_scan_title_is_protected(const char *title_id) {
   if (!title_id || title_id[0] == '\0')
     return false;
